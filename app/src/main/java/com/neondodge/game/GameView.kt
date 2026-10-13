@@ -14,6 +14,7 @@ import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
@@ -38,11 +39,13 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
 
     private val cyan = Color.parseColor("#00E5FF")
     private val pink = Color.parseColor("#FF2E93")
-    private val violet = Color.parseColor("#7C4DFF")
     private val white = Color.WHITE
 
     private val prefs = context.getSharedPreferences("neon_dodge", Context.MODE_PRIVATE)
     private var best = prefs.getInt("best", 0)
+    private var muted = prefs.getBoolean("muted", false)
+    private val sfx = SoundFx().also { it.muted = muted }
+    private var muteTouch = false
 
     private var state = State.READY
     private var running = false
@@ -75,6 +78,7 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeJoin = Paint.Join.ROUND
+        strokeCap = Paint.Cap.ROUND
     }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG)
     private val normalFace = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -114,6 +118,11 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
                 )
             )
         }
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        sfx.release()
     }
 
     // ---------- دورة الحياة ----------
@@ -158,6 +167,7 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
         playerX = w / 2f
         targetX = playerX
         state = State.PLAYING
+        sfx.start()
     }
 
     private fun gameOver() {
@@ -170,6 +180,7 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
             prefs.edit().putInt("best", best).apply()
         }
         burst(playerX, playerY, pink, 40)
+        sfx.over()
     }
 
     private fun burst(x: Float, y: Float, color: Int, n: Int) {
@@ -257,6 +268,8 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
                 if (lives <= 0) {
                     gameOver()
                     return
+                } else {
+                    sfx.hit()
                 }
             }
             i--
@@ -272,6 +285,7 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
                 orbs.removeAt(i)
                 scoreF += 50f
                 burst(o.x, o.y, cyan, 14)
+                sfx.collect()
             }
             i--
         }
@@ -284,10 +298,21 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
         targetX = x.coerceIn(m, w - m)
     }
 
+    private fun inMuteButton(x: Float, y: Float): Boolean =
+        abs(x - w / 2f) < 34f * u && y < 82f * u
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (inMuteButton(e.x, e.y)) {
+                    muted = !muted
+                    sfx.muted = muted
+                    prefs.edit().putBoolean("muted", muted).apply()
+                    muteTouch = true
+                    return true
+                }
+                muteTouch = false
                 when (state) {
                     State.READY -> startGame()
                     State.PAUSED -> state = State.PLAYING
@@ -296,7 +321,8 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
                 }
                 setTarget(e.x)
             }
-            MotionEvent.ACTION_MOVE -> setTarget(e.x)
+            MotionEvent.ACTION_MOVE -> if (!muteTouch) setTarget(e.x)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> muteTouch = false
         }
         return true
     }
@@ -381,7 +407,7 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
                 drawCenter(canvas, "تفادَ الكتل الوردية", h * 0.40f, 20f * u, white)
                 drawCenter(canvas, "واجمع الكرات المضيئة", h * 0.40f + 30f * u, 20f * u, white)
                 val a = (150 + 105 * sin(pulse * 4f)).toInt()
-                drawCenter(canvas, "المس للبدء", h * 0.58f, 26f * u, withAlpha(violet, 255).let { withAlpha(white, a) }, true)
+                drawCenter(canvas, "المس للبدء", h * 0.58f, 26f * u, withAlpha(white, a), true)
                 if (best > 0) {
                     drawCenter(canvas, "الأفضل", h * 0.68f, 16f * u, withAlpha(white, 180))
                     drawCenter(canvas, best.toString(), h * 0.68f + 34f * u, 30f * u, cyan, true)
@@ -412,6 +438,8 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
             }
             State.PLAYING -> {}
         }
+
+        drawMute(canvas)
     }
 
     private fun drawShip(canvas: Canvas) {
@@ -474,6 +502,37 @@ class GameView(context: Context) : View(context), Choreographer.FrameCallback {
                 stroke.strokeWidth = 2f * u
                 canvas.drawCircle(cx, cy, 7f * u, stroke)
             }
+        }
+    }
+
+    private fun drawMute(canvas: Canvas) {
+        val cx = w / 2f
+        val cy = 46f * u
+        val s = 9f * u
+        stroke.color = withAlpha(white, if (muted) 110 else 230)
+        stroke.strokeWidth = 2.2f * u
+
+        path.reset()
+        path.moveTo(cx - s, cy - s * 0.4f)
+        path.lineTo(cx - s * 0.4f, cy - s * 0.4f)
+        path.lineTo(cx + s * 0.2f, cy - s)
+        path.lineTo(cx + s * 0.2f, cy + s)
+        path.lineTo(cx - s * 0.4f, cy + s * 0.4f)
+        path.lineTo(cx - s, cy + s * 0.4f)
+        path.close()
+        canvas.drawPath(path, stroke)
+
+        if (muted) {
+            canvas.drawLine(cx + s * 0.7f, cy - s * 0.6f, cx + s * 1.7f, cy + s * 0.6f, stroke)
+            canvas.drawLine(cx + s * 0.7f, cy + s * 0.6f, cx + s * 1.7f, cy - s * 0.6f, stroke)
+        } else {
+            val ax = cx + s * 0.2f
+            var r = s * 0.8f
+            rect.set(ax - r, cy - r, ax + r, cy + r)
+            canvas.drawArc(rect, -45f, 90f, false, stroke)
+            r = s * 1.45f
+            rect.set(ax - r, cy - r, ax + r, cy + r)
+            canvas.drawArc(rect, -45f, 90f, false, stroke)
         }
     }
 }
